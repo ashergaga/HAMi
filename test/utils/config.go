@@ -26,7 +26,6 @@ const (
 	GPUPodMemoryUnit     = "MiB"
 	GPUPodCore           = "40"
 	GPUNameSpace         = "hami-system"
-	GPUNode              = "gpu-master"
 	GPUCudaTestPass      = "Test PASSED"
 )
 
@@ -38,4 +37,11 @@ const (
 	ErrMessageFilteringFailed  = "no available node"
 	ErrReasonFailedScheduling  = "FilteringFailed"
 	ErrMessageFailedScheduling = "0/1 nodes are available"
+)
+
+// MIG related.
+const (
+	MIGModeAnnotation       = "nvidia.com/vgpu-mode"
+	MIGModeValue            = "mig"
+	MIGAllocationAnnotation = "hami.io/vgpu-mig-allocations"
 )

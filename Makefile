@@ -22,8 +22,8 @@ all: build
 
 docker:
 	docker build \
+	--platform ${TARGET_PLATFORMS} \
 	--build-arg GOLANG_IMAGE=${GOLANG_IMAGE} \
-	--build-arg TARGET_ARCH=${TARGET_ARCH} \
 	--build-arg NVIDIA_IMAGE=${NVIDIA_IMAGE} \
 	--build-arg DEST_DIR=${DEST_DIR} \
 	--build-arg VERSION=${VERSION} \
@@ -33,8 +33,8 @@ docker:
 dockerwithlib:
 	docker build \
 	--no-cache \
+	--platform ${TARGET_PLATFORMS} \
 	--build-arg GOLANG_IMAGE=${GOLANG_IMAGE} \
-	--build-arg TARGET_ARCH=${TARGET_ARCH} \
 	--build-arg NVIDIA_IMAGE=${NVIDIA_IMAGE} \
 	--build-arg DEST_DIR=${DEST_DIR} \
 	--build-arg VERSION=${VERSION} \
@@ -66,6 +66,12 @@ test:
 	mkdir -p ./_output/coverage/
 	bash hack/unit-test.sh
 
+# Runs every Go benchmark to completion. Set BENCHTIME for a longer, more
+# meaningful local measurement, e.g. BENCHTIME=1s make bench.
+.PHONY: bench
+bench:
+	bash hack/bench.sh
+
 lint:
 	bash hack/verify-staticcheck.sh
 
@@ -93,6 +99,21 @@ lint_chart:
       (($$?==0)) || { echo "error, failed to check chart trivy" && exit 1 ; } ; \
       echo "chart trivy check: pass"
 
+.PHONY: update-helm-chart-docs
+update-helm-chart-docs:
+	$(MAKE) -C charts update-helm-chart-docs
+
+.PHONY: verify-helm-chart-docs
+verify-helm-chart-docs:
+	$(MAKE) -C charts verify-helm-chart-docs
+
+.PHONY: verify_chart
+verify_chart:
+	$(MAKE) -C charts validate
+	$(MAKE) verify-helm-chart-docs
+	bash ./hack/verify-chart-version.sh
+	$(MAKE) lint_chart
+
 .PHONY: e2e-env-setup
 e2e-env-setup:
 	./hack/e2e-test-setup.sh
@@ -109,3 +130,14 @@ local-deploy: docker
 e2e-test:
 	./hack/e2e-test.sh "${E2E_TYPE}" "${KUBE_CONF}"
 
+.PHONY: e2e-mig-test
+e2e-mig-test:
+	./hack/e2e-mig-test.sh "${KUBE_CONF}"
+
+.PHONY: e2e-mig-smoke-test
+e2e-mig-smoke-test:
+	./hack/e2e-mig-smoke-test.sh "${KUBE_CONF}"
+
+.PHONY: e2e-policy-test
+e2e-policy-test:
+	HAMI_E2E_REQUIRE_POLICY_TOPOLOGY=true bash ./hack/e2e-policy-test.sh "${KUBE_CONF}"

@@ -34,7 +34,6 @@ import (
 var _ = ginkgo.Describe("Pod E2E Tests", ginkgo.Ordered, func() {
 	const (
 		Namespace      = utils.GPUNameSpace
-		NodeName       = utils.GPUNode
 		NodeLabelKey   = utils.GPUNodeLabelKey
 		NodeLabelValue = utils.GPUNodeLabelValue
 		DeleteTimeout  = 300 * time.Second
@@ -42,14 +41,26 @@ var _ = ginkgo.Describe("Pod E2E Tests", ginkgo.Ordered, func() {
 	)
 
 	var (
-		clientSet = utils.GetClientSet()
+		clientSet *kubernetes.Clientset
 		newPod    *corev1.Pod
+		nodeName  string
 	)
 
 	ginkgo.BeforeAll(func() {
+		clientSet = utils.GetClientSet()
+
+		var err error
+		nodeName, err = utils.GetGPUNode(clientSet)
+		gomega.Expect(err).NotTo(gomega.HaveOccurred(), "Failed to find GPU node: E2E tests require at least one node with nvidia.com/gpu capacity")
+		fmt.Printf("Using GPU node: %s\n", nodeName)
+
 		ginkgo.By("Adding node labeling")
-		_, err := utils.AddNodeLabel(clientSet, NodeName, NodeLabelKey, NodeLabelValue)
+		_, err = utils.AddNodeLabel(clientSet, nodeName, NodeLabelKey, NodeLabelValue)
 		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+
+		ginkgo.By("Waiting for device-plugin to register healthy GPU devices")
+		err = utils.WaitForDevicePluginReady(clientSet, nodeName, 5*time.Minute, 2*time.Second)
+		gomega.Expect(err).NotTo(gomega.HaveOccurred(), "device-plugin did not become ready on node %s", nodeName)
 	})
 
 	ginkgo.AfterEach(func() {
@@ -59,7 +70,7 @@ var _ = ginkgo.Describe("Pod E2E Tests", ginkgo.Ordered, func() {
 
 	ginkgo.AfterAll(func() {
 		ginkgo.By("Deleting node labeling")
-		_, err := utils.RemoveNodeLabel(clientSet, NodeName, NodeLabelKey)
+		_, err := utils.RemoveNodeLabel(clientSet, nodeName, NodeLabelKey)
 		gomega.Expect(err).NotTo(gomega.HaveOccurred())
 	})
 

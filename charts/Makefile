@@ -5,9 +5,15 @@ include  ../Makefile.defs
 VERSION_REGEX := '[vV]*[0-9]\+\.[0-9]\+\.[0-9]\+.*'
 CHART_FILE := "./hami/Chart.yaml"
 VALUES_FILE := "./hami/values.yaml"
+HELM_DOCS_ARGS := --chart-search-root ./hami --ignore-non-descriptions --log-level warning
 
-.PHONY: all lint update-versions deps
+.PHONY: all lint update-versions deps validate clean update-helm-chart-docs verify-helm-chart-docs
 all: update-versions deps lint package
+
+# Validate the committed chart without updating release versions.
+validate:
+	helm lint --with-subcharts ./hami --debug
+	helm template hami ./hami > /dev/null
 
 #update version in chart
 update-versions:
@@ -18,8 +24,11 @@ update-versions:
 	echo "FULL_BUILD_VERSION=$(FULL_BUILD_VERSION)"
 	@# Update chart versions to point to the current version.
 	@# Note: Only update the main chart version and appVersion (before dependencies section), not dependencies
+	@# SemVer forbids leading zeros in numeric pre-release IDs, so CI tags like
+	@# 2.9.0-0749842 (git short SHA) are rejected by helm. Prefix a purely numeric
+	@# suffix with 'g' (git-describe style) to keep the identifier alphanumeric.
 	hami_version="$(VERSION)";		\
-	chart_version=`echo $(VERSION) | tr -d 'v'`; \
+	chart_version=`echo $(VERSION) | sed 's/^[vV]//' | sed -E 's/^([0-9]+\.[0-9]+\.[0-9]+)-([0-9]+)$$/\1-g\2/'`; \
 	CHART_VERSION="$$chart_version" perl -i -pe 'BEGIN { $$skip = 0; } if (/^dependencies:/) { $$skip = 1; } if (!$$skip && /^version: /) { s/"*$(VERSION_REGEX)"*/$$ENV{CHART_VERSION}/; }' $(CHART_FILE);		\
 	CHART_VERSION="$$chart_version" perl -i -pe 'BEGIN { $$skip = 0; } if (/^dependencies:/) { $$skip = 1; } if (!$$skip && /^appVersion: /) { s/"*$(VERSION_REGEX)"*/"$$ENV{CHART_VERSION}"/; }' $(CHART_FILE);	\
 	HAMI_VERSION="$$hami_version" perl -i -pe 's/imageTag: "*$(VERSION_REGEX)"*/imageTag: "$$ENV{HAMI_VERSION}"/g' $(VALUES_FILE)
@@ -37,3 +46,14 @@ package: lint
 
 clean:
 	rm -f *.tgz
+
+update-helm-chart-docs:
+	@task_docs_file=$$(mktemp); trap 'rm -f "$$task_docs_file"' EXIT; \
+	helm-docs $(HELM_DOCS_ARGS) --dry-run > "$$task_docs_file" || exit $$?; \
+	grep -q '^<!-- END GENERATED VALUES -->$$' "$$task_docs_file" || exit 1; \
+	cp "$$task_docs_file" ./hami/README.md
+
+verify-helm-chart-docs:
+	@task_docs_file=$$(mktemp); trap 'rm -f "$$task_docs_file"' EXIT; \
+	helm-docs $(HELM_DOCS_ARGS) --dry-run > "$$task_docs_file" || exit $$?; \
+	diff -u ./hami/README.md "$$task_docs_file"

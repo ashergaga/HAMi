@@ -53,11 +53,42 @@ func (l NodeScoreList) Less(i, j int) bool {
 	return l.NodeList[i].Score < l.NodeList[j].Score
 }
 
+// policyNeutralScorer is an optional interface a device backend may implement to
+// declare that its ScoreNode result is policy-independent and follows a "higher
+// score is a better node" convention. Backends that implement it must not
+// inspect the scheduler policy inside ScoreNode; instead OverrideScore weights
+// the returned score and adapts it to the active scheduling policy (for example,
+// inverting it under the Spread policy). This keeps policy handling in one place
+// so new policies do not require backend-specific changes.
+type policyNeutralScorer interface {
+	PolicyNeutralScore()
+}
+
 func (ns *NodeScore) OverrideScore(previous []*device.DeviceUsage, policy string) {
-	// current user having request resource
 	devScore := float32(0)
 	for idx, val := range ns.Devices {
-		devScore += device.GetDevices()[idx].ScoreNode(ns.Node, val, previous, policy)
+		dev, ok := device.GetDevices()[idx]
+		if !ok || dev == nil {
+			klog.V(4).Infof("Skip scoring for device type %s: not registered", idx)
+			continue
+		}
+
+		score := dev.ScoreNode(ns.Node, val, previous, policy)
+
+		// Backends implementing policyNeutralScorer return policy-independent
+		// "higher is better" scores. For the Spread policy (which selects the
+		// lowest score), we invert the score to preserve the ranking.
+		// We also apply a weight of 10000 to ensure device scores dominate
+		// the base node score.
+		if _, ok := dev.(policyNeutralScorer); ok {
+			weight := float32(10000)
+			if policy == util.NodeSchedulerPolicySpread.String() {
+				weight = -10000
+			}
+			score = weight * score
+		}
+
+		devScore += score
 	}
 	ns.Score += devScore
 	klog.V(2).Infof("node %s default score is %f, computer override score is %f", ns.NodeID, ns.Score-devScore, ns.Score)
@@ -73,7 +104,7 @@ func (ns *NodeScore) SnapshotDevice(devices DeviceUsageList) []*device.DeviceUsa
 }
 
 func (ns *NodeScore) ComputeDefaultScore(devices DeviceUsageList) {
-	used, usedCore, usedMem := int32(0), int32(0), int32(0)
+	used, usedCore, usedMem := int64(0), int64(0), int64(0)
 	for _, device := range devices.DeviceLists {
 		used += device.Device.Used
 		usedCore += device.Device.Usedcores
@@ -81,7 +112,7 @@ func (ns *NodeScore) ComputeDefaultScore(devices DeviceUsageList) {
 	}
 	klog.V(2).Infof("node %s used %d, usedCore %d, usedMem %d,", ns.NodeID, used, usedCore, usedMem)
 
-	total, totalCore, totalMem := int32(0), int32(0), int32(0)
+	total, totalCore, totalMem := int64(0), int64(0), int64(0)
 	for _, deviceLists := range devices.DeviceLists {
 		total += deviceLists.Device.Count
 		totalCore += deviceLists.Device.Totalcore

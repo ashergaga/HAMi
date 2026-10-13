@@ -3,9 +3,9 @@ GO111MODULE=on
 CMDS=scheduler vGPUmonitor
 DEVICES=nvidia
 OUTPUT_DIR=bin
-TARGET_ARCH=amd64
-GOLANG_IMAGE=golang:1.26.2-bookworm
-NVIDIA_IMAGE=nvidia/cuda:12.3.2-devel-ubuntu20.04
+TARGET_PLATFORMS=linux/amd64
+GOLANG_IMAGE=golang:1.27.2-bookworm@sha256:5cf287a799e6b94384bad13d16b14904c531f51ba65792237e122ce42b392f61
+NVIDIA_IMAGE=nvidia/cuda:13.3.0-cudnn-devel-ubi8@sha256:e5b2b971730b6d0defd6d1bd7697630e0e599c359190cc4351e3032134e7b401
 DEST_DIR=/usr/local/vgpu/
 
 VERSION = v0.0.1

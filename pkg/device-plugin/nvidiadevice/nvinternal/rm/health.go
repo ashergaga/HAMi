@@ -96,7 +96,11 @@ func (r *nvmlResourceManager) checkHealth(stop <-chan interface{}, devices Devic
 		uuid, gi, ci, err := r.getDevicePlacement(d)
 		if err != nil {
 			klog.Warningf("Could not determine device placement for %v: %v; Marking it unhealthy.", d.ID, err)
-			unhealthy <- d
+			select {
+			case unhealthy <- d:
+			case <-stop:
+				return nil
+			}
 			continue
 		}
 		deviceIDToGiMap[d.ID] = gi
@@ -106,24 +110,36 @@ func (r *nvmlResourceManager) checkHealth(stop <-chan interface{}, devices Devic
 		gpu, ret := r.nvml.DeviceGetHandleByUUID(uuid)
 		if ret != nvml.SUCCESS {
 			klog.Infof("unable to get device handle from UUID: %v; marking it as unhealthy", ret)
-			unhealthy <- d
+			select {
+			case unhealthy <- d:
+			case <-stop:
+				return nil
+			}
 			continue
 		}
 
 		supportedEvents, ret := gpu.GetSupportedEventTypes()
 		if ret != nvml.SUCCESS {
 			klog.Infof("unable to determine the supported events for %v: %v; marking it as unhealthy", d.ID, ret)
-			unhealthy <- d
+			select {
+			case unhealthy <- d:
+			case <-stop:
+				return nil
+			}
 			continue
 		}
 
 		ret = gpu.RegisterEvents(eventMask&supportedEvents, eventSet)
-		if ret == nvml.ERROR_NOT_SUPPORTED {
+		switch {
+		case ret == nvml.ERROR_NOT_SUPPORTED:
 			klog.Warningf("Device %v is too old to support healthchecking.", d.ID)
-		}
-		if ret != nvml.SUCCESS {
+		case ret != nvml.SUCCESS:
 			klog.Infof("Marking device %v as unhealthy: %v", d.ID, ret)
-			unhealthy <- d
+			select {
+			case unhealthy <- d:
+			case <-stop:
+				return nil
+			}
 		}
 	}
 
@@ -146,7 +162,11 @@ func (r *nvmlResourceManager) checkHealth(stop <-chan interface{}, devices Devic
 		if ret != nvml.SUCCESS {
 			klog.Infof("Error waiting for event: %v; Marking all devices as unhealthy", ret)
 			for _, d := range devices {
-				unhealthy <- d
+				select {
+				case unhealthy <- d:
+				case <-stop:
+					return nil
+				}
 			}
 			continue
 		}
@@ -167,7 +187,11 @@ func (r *nvmlResourceManager) checkHealth(stop <-chan interface{}, devices Devic
 			// If we cannot reliably determine the device UUID, we mark all devices as unhealthy.
 			klog.Infof("Failed to determine uuid for event %v: %v; Marking all devices as unhealthy.", e, ret)
 			for _, d := range devices {
-				unhealthy <- d
+				select {
+				case unhealthy <- d:
+				case <-stop:
+					return nil
+				}
 			}
 			continue
 		}
@@ -188,7 +212,11 @@ func (r *nvmlResourceManager) checkHealth(stop <-chan interface{}, devices Devic
 		}
 
 		klog.Infof("XidCriticalError: Xid=%d on Device=%s; marking device as unhealthy.", e.EventData, d.ID)
-		unhealthy <- d
+		select {
+		case unhealthy <- d:
+		case <-stop:
+			return nil
+		}
 	}
 }
 
@@ -206,13 +234,13 @@ func (h disabledXIDs) IsAllDisabled() bool {
 	if allDisabled, ok := h[allXIDs]; ok {
 		return allDisabled
 	}
-	// At this point we wither have explicitly disabled XIDs or explicitly
+	// At this point we either have explicitly disabled XIDs or explicitly
 	// enabled XIDs. Since ANY XID that's not specified is assumed enabled, we
 	// return here.
 	return false
 }
 
-// IsDisabled checks whether the specified XID has been explicitly disalbled.
+// IsDisabled checks whether the specified XID has been explicitly disabled.
 // An XID is considered disabled if it has been explicitly disabled, or all XIDs
 // have been disabled.
 func (h disabledXIDs) IsDisabled(xid uint64) bool {
@@ -338,7 +366,15 @@ func (r *nvmlResourceManager) getMigDeviceParts(d *Device) (string, uint32, uint
 		//nolint:gosec  // We know that the values returned from Get*InstanceId are within the valid uint32 range.
 		return parentUUID, uint32(gi), uint32(ci), nil
 	}
-	return parseMigDeviceUUID(uuid)
+	// Fall back to parsing the legacy MIG UUID format (MIG-GPU-<parent-uuid>/<gi>/<ci>).
+	// Modern drivers assign opaque MIG UUIDs that carry no placement information,
+	// so if parsing fails the NVML error above must not be masked: it is the
+	// actual reason the device placement could not be determined.
+	parentUUID, gi, ci, err := parseMigDeviceUUID(uuid)
+	if err != nil {
+		return "", 0, 0, fmt.Errorf("failed to get MIG device handle for %s: %s; %v", uuid, nvml.ErrorString(ret), err)
+	}
+	return parentUUID, gi, ci, nil
 }
 
 // parseMigDeviceUUID splits the MIG device UUID into the parent device UUID and ci and gi
